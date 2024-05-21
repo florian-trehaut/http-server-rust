@@ -1,30 +1,22 @@
-use std::{
-    io::{BufRead, BufReader, Write},
-    net::TcpListener,
-};
+use anyhow::{Context, Result};
+use http_server_starter_rust::client_handler::ClientHandler;
+use tokio::net::TcpListener;
 
-fn main() {
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
+#[tokio::main]
+async fn main() -> Result<()> {
     println!("Logs from your program will appear here!");
 
-    let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:4221")
+        .await
+        .context("Can't start listener")?;
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(mut stream) => {
-                println!("accepted new connection");
-                let buf = BufReader::new(&mut stream);
-                let request = buf.lines().next().unwrap().unwrap();
-                let status_line = match &request[..] {
-                    "GET / HTTP/1.1" => "HTTP/1.1 200 OK \r\n\r\n",
-                    _ => "HTTP/1.1 404 NOT FOUND \r\n\r\n",
-                };
-                let response = status_line;
-                stream.write_all(response.as_bytes()).unwrap();
+    while let Ok((mut stream, _socket_address)) = listener.accept().await {
+        tokio::spawn(async move {
+            if let Err(e) = ClientHandler::parse_request(&mut stream).await {
+                panic!("Error handling client request: {e}");
             }
-            Err(e) => {
-                println!("error: {}", e);
-            }
-        }
+        });
     }
+
+    Ok(())
 }
