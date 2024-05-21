@@ -256,9 +256,12 @@ impl ClientHandler {
         response: HTTPResponse,
         request: &str,
     ) -> Result<HTTPResponse, ClientHandlerError> {
-        println!("Responding with '{response}'");
+        println!(
+            "Responding with '{}'",
+            String::from_utf8_lossy(&response.as_http_bytes())
+        );
         stream
-            .write_all(response.to_string().as_bytes())
+            .write_all(&response.as_http_bytes())
             .await
             .map_err(|e| ClientHandlerError::ClientUnreachable(e, request.to_string()))?;
 
@@ -323,7 +326,7 @@ mod tests {
         let response = ClientHandler::parse_request(&mut stream, None)
             .await
             .unwrap();
-        assert_eq!(response.to_string(), "HTTP/1.1 200 OK\r\n\r\n");
+        assert_eq!(response.as_http_bytes(), b"HTTP/1.1 200 OK\r\n\r\n");
     }
 
     #[tokio::test]
@@ -381,7 +384,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(response.to_string(), "HTTP/1.1 200 OK\r\n\r\n");
+        assert_eq!(response.as_http_bytes(), b"HTTP/1.1 200 OK\r\n\r\n");
     }
 
     #[tokio::test]
@@ -412,8 +415,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            response.to_string(),
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\n\r\ntest"
+            response.as_http_bytes(),
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\n\r\ntest"
         );
     }
 
@@ -427,8 +430,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            response.to_string(),
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\n\r\nTest"
+            response.as_http_bytes(),
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\n\r\nTest"
         );
     }
 
@@ -447,8 +450,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            response.to_string(),
-            "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 25\r\n\r\nMissing User-Agent header"
+            response.as_http_bytes(),
+            b"HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 25\r\n\r\nMissing User-Agent header"
         );
     }
 
@@ -466,6 +469,6 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(response.to_string(), "HTTP/1.1 404 Not Found\r\n\r\n");
+        assert_eq!(response.as_http_bytes(), b"HTTP/1.1 404 Not Found\r\n\r\n");
     }
 }

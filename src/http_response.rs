@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::http_request::Encoding;
+use crate::{gzip::Gzip, http_request::Encoding};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HTTPResponse {
@@ -16,19 +16,35 @@ impl HTTPResponse {
             body: None,
         }
     }
-}
+    pub fn as_http_bytes(&self) -> Vec<u8> {
+        let mut buf = vec![];
+        buf.extend_from_slice(format!("{}", self.status).as_bytes());
 
-impl Display for HTTPResponse {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.status)?;
         match self.header.clone() {
-            Some(header) => write!(f, "{header}")?,
-            None => write!(f, "\r\n")?,
+            Some(header) => {
+                if let Some(encoding) = header.content_encoding {
+                    buf.extend_from_slice(format!("Content-Encoding: {encoding}\r\n").as_bytes());
+                };
+                buf.extend_from_slice(
+                    format!("Content-Type: {}\r\n", header.content_type).as_bytes(),
+                );
+                buf.extend_from_slice(
+                    format!("Content-Length: {}\r\n", header.content_length).as_bytes(),
+                );
+                if let Some(location) = header.location {
+                    buf.extend_from_slice(format!("Location: {location}\r\n").as_bytes());
+                }
+            }
+            None => buf.extend_from_slice(b"\r\n"),
         }
+        buf.extend_from_slice(b"\r\n");
+
         match &self.body {
-            Some(body) => write!(f, "{body}"),
-            None => write!(f, ""),
+            Some(body) => buf.extend_from_slice(&body.0),
+            None => (),
         }
+
+        buf
     }
 }
 
@@ -45,7 +61,10 @@ impl HTTPResponseBuilder {
         content_type: ContentType,
         encoding: &[Encoding],
     ) -> Self {
-        let body = ResponseBody(content.to_string());
+        let body = encoding.first().map_or_else(
+            || ResponseBody(content.as_bytes().to_owned()),
+            |_encoding| ResponseBody(Gzip::parse(content).as_bytes().to_owned()),
+        );
         let header = ResponseHeader::new(content_type, &body, encoding.first().copied());
         Self {
             status: self.status,
@@ -117,6 +136,7 @@ impl ResponseHeader {
         }
     }
 }
+
 impl Display for ResponseHeader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(encoding) = self.content_encoding {
@@ -159,14 +179,9 @@ impl Display for ContentLength {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct ResponseBody(String);
+struct ResponseBody(Vec<u8>);
 impl ResponseBody {
     fn length(&self) -> usize {
         self.0.len()
-    }
-}
-impl Display for ResponseBody {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
     }
 }
