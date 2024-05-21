@@ -96,11 +96,13 @@ impl Display for ResponseHeader {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ContentType {
     TextPlain,
+    OctetStream,
 }
 impl Display for ContentType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::TextPlain => write!(f, "text/plain"),
+            Self::OctetStream => write!(f, "application/octet-stream"),
         }
     }
 }

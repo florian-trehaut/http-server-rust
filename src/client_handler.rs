@@ -1,3 +1,5 @@
+use std::fs;
+
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -28,7 +30,10 @@ impl ClientHandler {
     /// # Errors
     ///
     /// Returns an error of type `ClientHandlerError` if the request is too large, the stream cannot be read, the request line is empty, or the request cannot be decoded to UTF-8.
-    pub async fn parse_request(stream: &mut TcpStream) -> Result<HTTPResponse, ClientHandlerError> {
+    pub async fn parse_request(
+        stream: &mut TcpStream,
+        directory: Option<String>,
+    ) -> Result<HTTPResponse, ClientHandlerError> {
         let mut buf = [0; 4096];
         let n = stream.read(&mut buf).await?;
         if n == buf.len() {
@@ -44,7 +49,9 @@ impl ClientHandler {
         let request_line: RequestLine = request_line.parse()?;
         let request_header: RequestHeader = buf.parse()?;
         let reponse = match request_line.method() {
-            RequestMethod::Get => Self::get(stream, buf, request_line, request_header).await?,
+            RequestMethod::Get => {
+                Self::get(stream, buf, request_line, request_header, directory).await?
+            }
         };
         Ok(reponse)
     }
@@ -68,6 +75,7 @@ impl ClientHandler {
         request: &str,
         request_line: RequestLine,
         request_header: RequestHeader,
+        directory: Option<String>,
     ) -> Result<HTTPResponse, ClientHandlerError> {
         let path = request_line.path().to_string();
         match path.as_str() {
@@ -84,16 +92,46 @@ impl ClientHandler {
                     .build();
                 Ok(Self::respond(stream, response, request).await?)
             }
-            _ if path.starts_with("/user-agent") => match request_header.user_agent() {
-                Some(user_agent) => {
+            _ if path.starts_with("/user-agent") => {
+                let Some(user_agent) = request_header.user_agent() else {
+                    {
+                        let response = HTTPResponse::new_builder(ResponseStatus::Http400)
+                            .with_body("Missing User-Agent header", ContentType::TextPlain)
+                            .build();
+                        return Self::respond(stream, response, request).await;
+                    }
+                };
+                let response = HTTPResponse::new_builder(ResponseStatus::Http200)
+                    .with_body(&user_agent.to_string(), ContentType::TextPlain)
+                    .build();
+                Ok(Self::respond(stream, response, request).await?)
+            }
+            _ if path.starts_with("/files/") => match path.get("/files/".len()..) {
+                Some(filepath) if !filepath.is_empty() => {
+                    let Some(directory) = directory else {
+                        let response = HTTPResponse::new_builder(ResponseStatus::Http404).build();
+                        return Self::respond(stream, response, request).await;
+                    };
+                    let Ok(file_content) = fs::read_to_string(format!("{directory}/{filepath}"))
+                    else {
+                        return Self::respond(
+                            stream,
+                            HTTPResponse::new_builder(ResponseStatus::Http404).build(),
+                            request,
+                        )
+                        .await;
+                    };
                     let response = HTTPResponse::new_builder(ResponseStatus::Http200)
-                        .with_body(&user_agent.to_string(), ContentType::TextPlain)
+                        .with_body(&file_content, ContentType::OctetStream)
                         .build();
                     Ok(Self::respond(stream, response, request).await?)
                 }
-                None => {
+                _ => {
                     let response = HTTPResponse::new_builder(ResponseStatus::Http400)
-                        .with_body("Missing User-Agent header", ContentType::TextPlain)
+                        .with_body(
+                            "File asked but no filename provided",
+                            ContentType::TextPlain,
+                        )
                         .build();
                     Ok(Self::respond(stream, response, request).await?)
                 }
@@ -189,7 +227,9 @@ mod tests {
     async fn test_parse_request_valid() {
         let request = b"GET / HTTP/1.1\r\n\r\n";
         let mut stream = setup_fake_client(request).await;
-        let response = ClientHandler::parse_request(&mut stream).await.unwrap();
+        let response = ClientHandler::parse_request(&mut stream, None)
+            .await
+            .unwrap();
         assert_eq!(response.to_string(), "HTTP/1.1 200 OK\r\n\r\n");
     }
 
@@ -198,7 +238,7 @@ mod tests {
         let request = &b"A".repeat(4097); // 4097 bytes
         let mut stream = setup_fake_client(request).await;
         assert!(matches!(
-            ClientHandler::parse_request(&mut stream).await,
+            ClientHandler::parse_request(&mut stream, None).await,
             Err(ClientHandlerError::RequestTooLarge)
         ));
     }
@@ -208,7 +248,7 @@ mod tests {
         let request = b"";
         let mut stream = setup_fake_client(request).await;
         assert!(matches!(
-            ClientHandler::parse_request(&mut stream).await,
+            ClientHandler::parse_request(&mut stream, None).await,
             Err(ClientHandlerError::NoRequestLineFound)
         ));
     }
@@ -218,7 +258,7 @@ mod tests {
         let request = "\r\n";
         let mut stream = setup_fake_client(request.as_bytes()).await;
         assert!(matches!(
-            ClientHandler::parse_request(&mut stream).await,
+            ClientHandler::parse_request(&mut stream, None).await,
             Err(ClientHandlerError::HTTPRequestLineError(_))
         ));
     }
@@ -229,7 +269,7 @@ mod tests {
         let request = &[0x80, 0x80, 0x80, 0x80];
         let mut stream = setup_fake_client(request).await;
         assert!(matches!(
-            ClientHandler::parse_request(&mut stream).await,
+            ClientHandler::parse_request(&mut stream, None).await,
             Err(ClientHandlerError::Utf8Error(..))
         ));
     }
@@ -239,10 +279,15 @@ mod tests {
         let request = "GET / HTTP/1.1\r\n\r\n";
         let request_line: RequestLine = request.parse().unwrap();
         let mut stream = setup_fake_client(request.as_bytes()).await;
-        let response =
-            ClientHandler::get(&mut stream, request, request_line, RequestHeader::_empty())
-                .await
-                .unwrap();
+        let response = ClientHandler::get(
+            &mut stream,
+            request,
+            request_line,
+            RequestHeader::_empty(),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(response.to_string(), "HTTP/1.1 200 OK\r\n\r\n");
     }
 
@@ -263,10 +308,15 @@ mod tests {
         let request = "GET /echo/test HTTP/1.1\r\n\r\n";
         let request_line: RequestLine = request.parse().unwrap();
         let mut stream = setup_fake_client(request.as_bytes()).await;
-        let response =
-            ClientHandler::get(&mut stream, request, request_line, RequestHeader::_empty())
-                .await
-                .unwrap();
+        let response = ClientHandler::get(
+            &mut stream,
+            request,
+            request_line,
+            RequestHeader::_empty(),
+            None,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             response.to_string(),
@@ -280,7 +330,7 @@ mod tests {
         let request_line: RequestLine = request.parse().unwrap();
         let request_header: RequestHeader = request.parse().unwrap();
         let mut stream = setup_fake_client(request.as_bytes()).await;
-        let response = ClientHandler::get(&mut stream, request, request_line, request_header)
+        let response = ClientHandler::get(&mut stream, request, request_line, request_header, None)
             .await
             .unwrap();
         assert_eq!(
@@ -294,10 +344,15 @@ mod tests {
         let request = "GET /user-agent HTTP/1.1\r\n\r\n";
         let request_line: RequestLine = request.parse().unwrap();
         let mut stream = setup_fake_client(request.as_bytes()).await;
-        let response =
-            ClientHandler::get(&mut stream, request, request_line, RequestHeader::_empty())
-                .await
-                .unwrap();
+        let response = ClientHandler::get(
+            &mut stream,
+            request,
+            request_line,
+            RequestHeader::_empty(),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             response.to_string(),
             "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 25\r\n\r\nMissing User-Agent header"
@@ -309,10 +364,15 @@ mod tests {
         let request = "GET /unknown HTTP/1.1\r\n\r\n";
         let request_line: RequestLine = request.parse().unwrap();
         let mut stream = setup_fake_client(request.as_bytes()).await;
-        let response =
-            ClientHandler::get(&mut stream, request, request_line, RequestHeader::_empty())
-                .await
-                .unwrap();
+        let response = ClientHandler::get(
+            &mut stream,
+            request,
+            request_line,
+            RequestHeader::_empty(),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(response.to_string(), "HTTP/1.1 404 Not Found\r\n\r\n");
     }
 }
