@@ -79,7 +79,7 @@ impl FromStr for RequestHeader {
         let accept_encoding = accept_encoding.map_or_else(Vec::new, |encoding| {
             encoding
                 .split(',')
-                .filter_map(|s| s.parse().ok())
+                .filter_map(|s| s.trim().parse().ok())
                 .collect::<Vec<Encoding>>()
         });
         Ok(Self {
