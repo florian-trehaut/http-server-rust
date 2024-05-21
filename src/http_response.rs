@@ -2,12 +2,12 @@ use std::fmt::Display;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HTTPResponse {
-    status: Status,
-    header: Option<Header>,
-    body: Option<Body>,
+    status: ResponseStatus,
+    header: Option<ResponseHeader>,
+    body: Option<ResponseBody>,
 }
 impl HTTPResponse {
-    pub const fn new_builder(status: Status) -> HTTPResponseBuilder {
+    pub const fn new_builder(status: ResponseStatus) -> HTTPResponseBuilder {
         HTTPResponseBuilder {
             status,
             header: None,
@@ -32,14 +32,14 @@ impl Display for HTTPResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HTTPResponseBuilder {
-    status: Status,
-    header: Option<Header>,
-    body: Option<Body>,
+    status: ResponseStatus,
+    header: Option<ResponseHeader>,
+    body: Option<ResponseBody>,
 }
 impl HTTPResponseBuilder {
     pub fn with_body(&self, content: &str, content_type: ContentType) -> Self {
-        let body = Body(content.to_string());
-        let header = Header::new(content_type, &body);
+        let body = ResponseBody(content.to_string());
+        let header = ResponseHeader::new(content_type, &body);
         Self {
             status: self.status,
             header: Some(header),
@@ -57,33 +57,35 @@ impl HTTPResponseBuilder {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 // We accept to hardcode version
-pub enum Status {
+pub enum ResponseStatus {
     Http200,
+    Http400,
     Http404,
 }
-impl Display for Status {
+impl Display for ResponseStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Http200 => write!(f, "HTTP/1.1 200 OK\r\n"),
+            Self::Http400 => write!(f, "HTTP/1.1 400 Bad Request\r\n"),
             Self::Http404 => write!(f, "HTTP/1.1 404 Not Found\r\n"),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct Header {
+struct ResponseHeader {
     content_type: ContentType,
     content_length: ContentLength,
 }
-impl Header {
-    fn new(content_type: ContentType, body: &Body) -> Self {
+impl ResponseHeader {
+    fn new(content_type: ContentType, body: &ResponseBody) -> Self {
         Self {
             content_type,
             content_length: ContentLength::from_body(body),
         }
     }
 }
-impl Display for Header {
+impl Display for ResponseHeader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Content-Type: {}\r\n", self.content_type)?;
         write!(f, "Content-Length: {}\r\n", self.content_length)?;
@@ -106,7 +108,7 @@ impl Display for ContentType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct ContentLength(usize);
 impl ContentLength {
-    fn from_body(body: &Body) -> Self {
+    fn from_body(body: &ResponseBody) -> Self {
         Self(body.length())
     }
 }
@@ -117,13 +119,13 @@ impl Display for ContentLength {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Body(String);
-impl Body {
+struct ResponseBody(String);
+impl ResponseBody {
     fn length(&self) -> usize {
         self.0.len()
     }
 }
-impl Display for Body {
+impl Display for ResponseBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }

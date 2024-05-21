@@ -5,8 +5,10 @@ use tokio::{
 };
 
 use crate::{
-    http_request::{HTTPHeader, HTTPHeaderError, HTTPMethod},
-    http_response::{ContentType, HTTPResponse, Status},
+    http_request::{
+        HTTPRequestLineError, RequestHeader, RequestHeaderError, RequestLine, RequestMethod,
+    },
+    http_response::{ContentType, HTTPResponse, ResponseStatus},
 };
 
 /// The `ClientHandler` struct represents a handler for client connections.
@@ -25,8 +27,8 @@ impl ClientHandler {
     ///
     /// # Errors
     ///
-    /// Returns an error of type `ClientHandlerError` if the request is too large, the stream cannot be read, the header is empty, or the request cannot be decoded to UTF-8.
-    pub async fn parse_request(stream: &mut TcpStream) -> Result<(), ClientHandlerError> {
+    /// Returns an error of type `ClientHandlerError` if the request is too large, the stream cannot be read, the request line is empty, or the request cannot be decoded to UTF-8.
+    pub async fn parse_request(stream: &mut TcpStream) -> Result<HTTPResponse, ClientHandlerError> {
         let mut buf = [0; 4096];
         let n = stream.read(&mut buf).await?;
         if n == buf.len() {
@@ -36,14 +38,15 @@ impl ClientHandler {
             ClientHandlerError::Utf8Error(e, String::from_utf8_lossy(&buf).to_string())
         })?;
         let mut request = buf.lines();
-        let Some(header) = request.next() else {
-            return Err(ClientHandlerError::NoHeaderFound);
+        let Some(request_line) = request.next() else {
+            return Err(ClientHandlerError::NoRequestLineFound);
         };
-        let header: HTTPHeader = header.parse()?;
-        match header.method() {
-            HTTPMethod::Get => Self::get(stream, buf, header).await?,
-        }
-        Ok(())
+        let request_line: RequestLine = request_line.parse()?;
+        let request_header: RequestHeader = buf.parse()?;
+        let reponse = match request_line.method() {
+            RequestMethod::Get => Self::get(stream, buf, request_line, request_header).await?,
+        };
+        Ok(reponse)
     }
 
     /// Handles the GET request from the client.
@@ -63,36 +66,45 @@ impl ClientHandler {
     async fn get(
         stream: &mut TcpStream,
         request: &str,
-        header: HTTPHeader,
-    ) -> Result<(), ClientHandlerError> {
-        let path = header.path().to_string();
+        request_line: RequestLine,
+        request_header: RequestHeader,
+    ) -> Result<HTTPResponse, ClientHandlerError> {
+        let path = request_line.path().to_string();
         match path.as_str() {
-            "/" => {
-                Self::respond(
-                    stream,
-                    HTTPResponse::new_builder(Status::Http200).build(),
-                    request,
-                )
-                .await?;
-            }
+            "/" => Ok(Self::respond(
+                stream,
+                HTTPResponse::new_builder(ResponseStatus::Http200).build(),
+                request,
+            )
+            .await?),
             _ if path.starts_with("/echo/") => {
                 let content = path.split('/').nth(2).unwrap_or_default();
-                let response = HTTPResponse::new_builder(Status::Http200)
+                let response = HTTPResponse::new_builder(ResponseStatus::Http200)
                     .with_body(content, ContentType::TextPlain)
                     .build();
-                Self::respond(stream, response, request).await?;
+                Ok(Self::respond(stream, response, request).await?)
             }
-            _ => {
-                Self::respond(
-                    stream,
-                    HTTPResponse::new_builder(Status::Http404).build(),
-                    request,
-                )
-                .await?;
-            }
+            _ if path.starts_with("/user-agent") => match request_header.user_agent() {
+                Some(user_agent) => {
+                    let response = HTTPResponse::new_builder(ResponseStatus::Http200)
+                        .with_body(&user_agent.to_string(), ContentType::TextPlain)
+                        .build();
+                    Ok(Self::respond(stream, response, request).await?)
+                }
+                None => {
+                    let response = HTTPResponse::new_builder(ResponseStatus::Http400)
+                        .with_body("Missing User-Agent header", ContentType::TextPlain)
+                        .build();
+                    Ok(Self::respond(stream, response, request).await?)
+                }
+            },
+            _ => Ok(Self::respond(
+                stream,
+                HTTPResponse::new_builder(ResponseStatus::Http404).build(),
+                request,
+            )
+            .await?),
         }
-
-        Ok(())
     }
 
     /// Sends the response to the client.
@@ -114,25 +126,26 @@ impl ClientHandler {
         stream: &mut TcpStream,
         response: HTTPResponse,
         request: &str,
-    ) -> Result<(), ClientHandlerError> {
+    ) -> Result<HTTPResponse, ClientHandlerError> {
         println!("Responding with '{response}'");
         stream
             .write_all(response.to_string().as_bytes())
             .await
             .map_err(|e| ClientHandlerError::ClientUnreachable(e, request.to_string()))?;
-        Ok(())
+
+        Ok(response)
     }
 }
 
 #[derive(Debug, Error)]
 #[allow(clippy::module_name_repetitions)]
 pub enum ClientHandlerError {
-    #[error("Request has no header")]
-    NoHeaderFound,
+    #[error("Request has no request line")]
+    NoRequestLineFound,
     #[error("Stream cannot be read")]
     UnreadableStream(#[from] std::io::Error),
-    #[error("Header request is empty")]
-    EmptyHeader,
+    #[error("Request line is empty")]
+    EmptyRequestLine,
     #[error("Can't respond to client to request : '{1}'\r\n{0} ")]
     ClientUnreachable(tokio::io::Error, String),
     #[error("Can't decode request to Utf8 : '{1}'\r\n{0}")]
@@ -142,7 +155,9 @@ pub enum ClientHandlerError {
     #[error("Error handling GET command: {0}")]
     GetCommandError(#[from] GetCommandError),
     #[error("{0}")]
-    HTTPHeaderError(#[from] HTTPHeaderError),
+    HTTPRequestLineError(#[from] HTTPRequestLineError),
+    #[error("{0}")]
+    RequestHeaderError(#[from] RequestHeaderError),
 }
 
 #[derive(Error, Debug)]
@@ -174,7 +189,8 @@ mod tests {
     async fn test_parse_request_valid() {
         let request = b"GET / HTTP/1.1\r\n\r\n";
         let mut stream = setup_fake_client(request).await;
-        assert!(ClientHandler::parse_request(&mut stream).await.is_ok());
+        let response = ClientHandler::parse_request(&mut stream).await.unwrap();
+        assert_eq!(response.to_string(), "HTTP/1.1 200 OK\r\n\r\n");
     }
 
     #[tokio::test]
@@ -188,22 +204,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_parse_request_no_header() {
+    async fn test_parse_request_no_request_line() {
         let request = b"";
         let mut stream = setup_fake_client(request).await;
         assert!(matches!(
             ClientHandler::parse_request(&mut stream).await,
-            Err(ClientHandlerError::NoHeaderFound)
+            Err(ClientHandlerError::NoRequestLineFound)
         ));
     }
 
     #[tokio::test]
-    async fn test_parse_request_empty_header() {
+    async fn test_parse_request_empty_request_line() {
         let request = "\r\n";
         let mut stream = setup_fake_client(request.as_bytes()).await;
         assert!(matches!(
             ClientHandler::parse_request(&mut stream).await,
-            Err(ClientHandlerError::HTTPHeaderError(_))
+            Err(ClientHandlerError::HTTPRequestLineError(_))
         ));
     }
 
@@ -221,11 +237,13 @@ mod tests {
     #[tokio::test]
     async fn test_get() {
         let request = "GET / HTTP/1.1\r\n\r\n";
-        let header: HTTPHeader = request.parse().unwrap();
+        let request_line: RequestLine = request.parse().unwrap();
         let mut stream = setup_fake_client(request.as_bytes()).await;
-        assert!(ClientHandler::get(&mut stream, request, header)
-            .await
-            .is_ok());
+        let response =
+            ClientHandler::get(&mut stream, request, request_line, RequestHeader::_empty())
+                .await
+                .unwrap();
+        assert_eq!(response.to_string(), "HTTP/1.1 200 OK\r\n\r\n");
     }
 
     #[tokio::test]
@@ -234,10 +252,67 @@ mod tests {
         let mut stream = setup_fake_client(request).await;
         assert!(ClientHandler::respond(
             &mut stream,
-            HTTPResponse::new_builder(Status::Http200).build(),
+            HTTPResponse::new_builder(ResponseStatus::Http200).build(),
             std::str::from_utf8(request).unwrap()
         )
         .await
         .is_ok());
+    }
+    #[tokio::test]
+    async fn test_get_echo() {
+        let request = "GET /echo/test HTTP/1.1\r\n\r\n";
+        let request_line: RequestLine = request.parse().unwrap();
+        let mut stream = setup_fake_client(request.as_bytes()).await;
+        let response =
+            ClientHandler::get(&mut stream, request, request_line, RequestHeader::_empty())
+                .await
+                .unwrap();
+
+        assert_eq!(
+            response.to_string(),
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\n\r\ntest"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_user_agent() {
+        let request = "GET /user-agent HTTP/1.1\r\nUser-Agent: Test\r\n\r\n";
+        let request_line: RequestLine = request.parse().unwrap();
+        let request_header: RequestHeader = request.parse().unwrap();
+        let mut stream = setup_fake_client(request.as_bytes()).await;
+        let response = ClientHandler::get(&mut stream, request, request_line, request_header)
+            .await
+            .unwrap();
+        assert_eq!(
+            response.to_string(),
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\n\r\nTest"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_user_agent_missing() {
+        let request = "GET /user-agent HTTP/1.1\r\n\r\n";
+        let request_line: RequestLine = request.parse().unwrap();
+        let mut stream = setup_fake_client(request.as_bytes()).await;
+        let response =
+            ClientHandler::get(&mut stream, request, request_line, RequestHeader::_empty())
+                .await
+                .unwrap();
+        assert_eq!(
+            response.to_string(),
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 25\r\n\r\nMissing User-Agent header"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_unknown_path() {
+        let request = "GET /unknown HTTP/1.1\r\n\r\n";
+        let request_line: RequestLine = request.parse().unwrap();
+        let mut stream = setup_fake_client(request.as_bytes()).await;
+        let response =
+            ClientHandler::get(&mut stream, request, request_line, RequestHeader::_empty())
+                .await
+                .unwrap();
+        assert_eq!(response.to_string(), "HTTP/1.1 404 Not Found\r\n\r\n");
     }
 }
