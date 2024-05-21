@@ -94,7 +94,11 @@ impl ClientHandler {
             _ if path.starts_with("/echo/") => {
                 let content = path.split('/').nth(2).unwrap_or_default();
                 let response = HTTPResponse::new_builder(ResponseStatus::Http200)
-                    .with_body(content, ContentType::TextPlain)
+                    .with_body(
+                        content,
+                        ContentType::TextPlain,
+                        request_header.accept_encoding(),
+                    )
                     .build();
                 Ok(Self::respond(stream, response, request).await?)
             }
@@ -102,13 +106,21 @@ impl ClientHandler {
                 let Some(user_agent) = request_header.user_agent() else {
                     {
                         let response = HTTPResponse::new_builder(ResponseStatus::Http400)
-                            .with_body("Missing User-Agent header", ContentType::TextPlain)
+                            .with_body(
+                                "Missing User-Agent header",
+                                ContentType::TextPlain,
+                                request_header.accept_encoding(),
+                            )
                             .build();
                         return Self::respond(stream, response, request).await;
                     }
                 };
                 let response = HTTPResponse::new_builder(ResponseStatus::Http200)
-                    .with_body(&user_agent.to_string(), ContentType::TextPlain)
+                    .with_body(
+                        &user_agent.to_string(),
+                        ContentType::TextPlain,
+                        request_header.accept_encoding(),
+                    )
                     .build();
                 Ok(Self::respond(stream, response, request).await?)
             }
@@ -128,7 +140,11 @@ impl ClientHandler {
                         .await;
                     };
                     let response = HTTPResponse::new_builder(ResponseStatus::Http200)
-                        .with_body(&file_content, ContentType::OctetStream)
+                        .with_body(
+                            &file_content,
+                            ContentType::OctetStream,
+                            request_header.accept_encoding(),
+                        )
                         .build();
                     Ok(Self::respond(stream, response, request).await?)
                 }
@@ -137,6 +153,7 @@ impl ClientHandler {
                         .with_body(
                             "File asked but no filename provided",
                             ContentType::TextPlain,
+                            request_header.accept_encoding(),
                         )
                         .build();
                     Ok(Self::respond(stream, response, request).await?)
@@ -155,7 +172,7 @@ impl ClientHandler {
         stream: &mut TcpStream,
         request: &str,
         request_line: RequestLine,
-        _: RequestHeader,
+        request_header: RequestHeader,
         directory: Option<String>,
     ) -> Result<HTTPResponse, ClientHandlerError> {
         let path = request_line.path().to_string();
@@ -174,14 +191,22 @@ impl ClientHandler {
                         return Self::respond(
                             stream,
                             HTTPResponse::new_builder(ResponseStatus::Http500)
-                                .with_body("Failed to write file", ContentType::TextPlain)
+                                .with_body(
+                                    "Failed to write file",
+                                    ContentType::TextPlain,
+                                    request_header.accept_encoding(),
+                                )
                                 .build(),
                             request,
                         )
                         .await;
                     };
                     let response = HTTPResponse::new_builder(ResponseStatus::Http201)
-                        .with_body("Resource created successfully", ContentType::TextPlain)
+                        .with_body(
+                            "Resource created successfully",
+                            ContentType::TextPlain,
+                            request_header.accept_encoding(),
+                        )
                         .with_location(format!("{directory}/{filepath}"))
                         .build();
                     Self::respond(stream, response, request).await
@@ -190,7 +215,11 @@ impl ClientHandler {
                     Self::respond(
                         stream,
                         HTTPResponse::new_builder(ResponseStatus::Http400)
-                            .with_body("No filepath specified", ContentType::TextPlain)
+                            .with_body(
+                                "No filepath specified",
+                                ContentType::TextPlain,
+                                request_header.accept_encoding(),
+                            )
                             .build(),
                         request,
                     )

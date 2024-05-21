@@ -28,6 +28,7 @@ pub enum RequestBodyError {
 pub struct RequestHeader {
     host: Option<Host>,
     user_agent: Option<UserAgent>,
+    accept_encoding: Vec<Encoding>,
 }
 impl RequestHeader {
     pub const fn _host(&self) -> Option<&Host> {
@@ -40,7 +41,12 @@ impl RequestHeader {
         Self {
             host: None,
             user_agent: None,
+            accept_encoding: vec![],
         }
+    }
+
+    pub fn accept_encoding(&self) -> &[Encoding] {
+        &self.accept_encoding
     }
 }
 impl FromStr for RequestHeader {
@@ -66,15 +72,53 @@ impl FromStr for RequestHeader {
             Some(user_agent) => Some(user_agent),
             None => None,
         };
-        Ok(Self { host, user_agent })
+        let accept_encoding = s
+            .lines()
+            .find(|l| l.starts_with("Accept-Encoding: "))
+            .map(|l| l["Accept-Encoding: ".len()..].to_string());
+        let accept_encoding = accept_encoding.map_or_else(Vec::new, |encoding| {
+            encoding
+                .split(',')
+                .filter_map(|s| s.parse().ok())
+                .collect::<Vec<Encoding>>()
+        });
+        Ok(Self {
+            host,
+            user_agent,
+            accept_encoding,
+        })
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy)]
+pub enum Encoding {
+    Gzip,
+}
+impl FromStr for Encoding {
+    type Err = RequestHeaderError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.to_lowercase() == "gzip" {
+            return Ok(Self::Gzip);
+        }
+        Err(RequestHeaderError::InvalidEncoding(s.to_string()))
+    }
+}
+impl Display for Encoding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Gzip => write!(f, "gzip"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Error)]
 pub enum RequestHeaderError {
     #[error("'Host: ' is found in HTTP request but seems empty")]
     InvalidHost,
     #[error("'User-Agent: ' is found in HTTP request but seems empty")]
     InvalidUserAgent,
+    #[error("'{0}' is not a supported encoding")]
+    InvalidEncoding(String),
 }
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Host(String);

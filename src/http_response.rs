@@ -1,5 +1,7 @@
 use std::fmt::Display;
 
+use crate::http_request::Encoding;
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HTTPResponse {
     status: ResponseStatus,
@@ -37,9 +39,14 @@ pub struct HTTPResponseBuilder {
     body: Option<ResponseBody>,
 }
 impl HTTPResponseBuilder {
-    pub fn with_body(&self, content: &str, content_type: ContentType) -> Self {
+    pub fn with_body(
+        &self,
+        content: &str,
+        content_type: ContentType,
+        encoding: &[Encoding],
+    ) -> Self {
         let body = ResponseBody(content.to_string());
-        let header = ResponseHeader::new(content_type, &body);
+        let header = ResponseHeader::new(content_type, &body, encoding.first().copied());
         Self {
             status: self.status,
             header: Some(header),
@@ -89,14 +96,16 @@ impl Display for ResponseStatus {
 struct ResponseHeader {
     content_type: ContentType,
     content_length: ContentLength,
+    content_encoding: Option<Encoding>,
     location: Option<String>,
 }
 impl ResponseHeader {
-    fn new(content_type: ContentType, body: &ResponseBody) -> Self {
+    fn new(content_type: ContentType, body: &ResponseBody, encoding: Option<Encoding>) -> Self {
         Self {
             content_type,
             content_length: ContentLength::from_body(body),
             location: None,
+            content_encoding: encoding,
         }
     }
     const fn add_location(&self, location: String) -> Self {
@@ -104,16 +113,19 @@ impl ResponseHeader {
             content_type: self.content_type,
             content_length: self.content_length,
             location: Some(location),
+            content_encoding: self.content_encoding,
         }
     }
 }
 impl Display for ResponseHeader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(encoding) = self.content_encoding {
+            write!(f, "Content-Encoding: {encoding}\r\n")?;
+        }
         write!(f, "Content-Type: {}\r\n", self.content_type)?;
         write!(f, "Content-Length: {}\r\n", self.content_length)?;
-        match self.location.clone() {
-            Some(location) => write!(f, "Location: {location}\r\n")?,
-            None => (),
+        if let Some(location) = self.location.clone() {
+            write!(f, "Location: {location}\r\n")?;
         }
         write!(f, "\r\n")
     }
