@@ -19,7 +19,7 @@ impl HTTPResponse {
 impl Display for HTTPResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.status)?;
-        match self.header {
+        match self.header.clone() {
             Some(header) => write!(f, "{header}")?,
             None => write!(f, "\r\n")?,
         }
@@ -46,10 +46,19 @@ impl HTTPResponseBuilder {
             body: Some(body),
         }
     }
+    pub fn with_location(&self, location: String) -> Self {
+        // sry im lazy today
+        let header = self.header.clone().unwrap().add_location(location);
+        Self {
+            status: self.status,
+            header: Some(header),
+            body: self.body.clone(),
+        }
+    }
     pub fn build(&self) -> HTTPResponse {
         HTTPResponse {
             status: self.status,
-            header: self.header,
+            header: self.header.clone(),
             body: self.body.clone(),
         }
     }
@@ -59,29 +68,42 @@ impl HTTPResponseBuilder {
 // We accept to hardcode version
 pub enum ResponseStatus {
     Http200,
+    Http201,
     Http400,
     Http404,
+    Http500,
 }
 impl Display for ResponseStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Http200 => write!(f, "HTTP/1.1 200 OK\r\n"),
+            Self::Http201 => write!(f, "HTTP/1.1 201 Created\r\n"),
             Self::Http400 => write!(f, "HTTP/1.1 400 Bad Request\r\n"),
             Self::Http404 => write!(f, "HTTP/1.1 404 Not Found\r\n"),
+            Self::Http500 => write!(f, "HTTP/1.1 500 Internal Server Error\r\n"),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ResponseHeader {
     content_type: ContentType,
     content_length: ContentLength,
+    location: Option<String>,
 }
 impl ResponseHeader {
     fn new(content_type: ContentType, body: &ResponseBody) -> Self {
         Self {
             content_type,
             content_length: ContentLength::from_body(body),
+            location: None,
+        }
+    }
+    const fn add_location(&self, location: String) -> Self {
+        Self {
+            content_type: self.content_type,
+            content_length: self.content_length,
+            location: Some(location),
         }
     }
 }
@@ -89,6 +111,10 @@ impl Display for ResponseHeader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Content-Type: {}\r\n", self.content_type)?;
         write!(f, "Content-Length: {}\r\n", self.content_length)?;
+        match self.location.clone() {
+            Some(location) => write!(f, "Location: {location}\r\n")?,
+            None => (),
+        }
         write!(f, "\r\n")
     }
 }

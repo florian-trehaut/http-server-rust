@@ -3,6 +3,28 @@ use std::{fmt::Display, str::FromStr};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RequestBody(String);
+impl FromStr for RequestBody {
+    type Err = RequestBodyError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let body_content = s
+            .split("\r\n\r\n")
+            .nth(1)
+            .ok_or(RequestBodyError::MissingBody)?;
+        Ok(Self(body_content.to_string()))
+    }
+}
+impl Display for RequestBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Error)]
+pub enum RequestBodyError {
+    #[error("Body is not found")]
+    MissingBody,
+}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RequestHeader {
     host: Option<Host>,
     user_agent: Option<UserAgent>,
@@ -110,11 +132,13 @@ impl FromStr for RequestLine {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RequestMethod {
     Get,
+    Post,
 }
 impl Display for RequestMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Get => write!(f, "GET"),
+            Self::Post => write!(f, "POST"),
         }
     }
 }
@@ -123,6 +147,7 @@ impl FromStr for RequestMethod {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "get" => Ok(Self::Get),
+            "post" => Ok(Self::Post),
             invalid_command => Err(HTTPMethodError::InvalidHTTPMethod(
                 invalid_command.to_string(),
             )),

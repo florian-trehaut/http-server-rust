@@ -8,7 +8,8 @@ use tokio::{
 
 use crate::{
     http_request::{
-        HTTPRequestLineError, RequestHeader, RequestHeaderError, RequestLine, RequestMethod,
+        HTTPRequestLineError, RequestBody, RequestBodyError, RequestHeader, RequestHeaderError,
+        RequestLine, RequestMethod,
     },
     http_response::{ContentType, HTTPResponse, ResponseStatus},
 };
@@ -50,7 +51,12 @@ impl ClientHandler {
         let request_header: RequestHeader = buf.parse()?;
         let reponse = match request_line.method() {
             RequestMethod::Get => {
+                println!("Get command received");
                 Self::get(stream, buf, request_line, request_header, directory).await?
+            }
+            RequestMethod::Post => {
+                println!("Post command received : {buf}");
+                Self::post(stream, buf, request_line, request_header, directory).await?
             }
         };
         Ok(reponse)
@@ -145,6 +151,62 @@ impl ClientHandler {
         }
     }
 
+    async fn post(
+        stream: &mut TcpStream,
+        request: &str,
+        request_line: RequestLine,
+        _: RequestHeader,
+        directory: Option<String>,
+    ) -> Result<HTTPResponse, ClientHandlerError> {
+        let path = request_line.path().to_string();
+        if path.starts_with("/files/") {
+            match path.get("/files/".len()..) {
+                Some(filepath) if !filepath.is_empty() => {
+                    let Some(directory) = directory else {
+                        println!("File path found in request but no directory provided in main");
+                        let response = HTTPResponse::new_builder(ResponseStatus::Http404).build();
+                        return Self::respond(stream, response, request).await;
+                    };
+                    println!("File path found and trying to write in file {directory}/{filepath}");
+                    let content: RequestBody = request.parse()?;
+                    let Ok(()) = fs::write(format!("{directory}/{filepath}"), content.to_string())
+                    else {
+                        return Self::respond(
+                            stream,
+                            HTTPResponse::new_builder(ResponseStatus::Http500)
+                                .with_body("Failed to write file", ContentType::TextPlain)
+                                .build(),
+                            request,
+                        )
+                        .await;
+                    };
+                    let response = HTTPResponse::new_builder(ResponseStatus::Http201)
+                        .with_body("Resource created successfully", ContentType::TextPlain)
+                        .with_location(format!("{directory}/{filepath}"))
+                        .build();
+                    Self::respond(stream, response, request).await
+                }
+                _ => {
+                    Self::respond(
+                        stream,
+                        HTTPResponse::new_builder(ResponseStatus::Http400)
+                            .with_body("No filepath specified", ContentType::TextPlain)
+                            .build(),
+                        request,
+                    )
+                    .await
+                }
+            }
+        } else {
+            println!("'{path}' is not found");
+            Self::respond(
+                stream,
+                HTTPResponse::new_builder(ResponseStatus::Http404).build(),
+                request,
+            )
+            .await
+        }
+    }
     /// Sends the response to the client.
     ///
     /// # Arguments
@@ -196,6 +258,8 @@ pub enum ClientHandlerError {
     HTTPRequestLineError(#[from] HTTPRequestLineError),
     #[error("{0}")]
     RequestHeaderError(#[from] RequestHeaderError),
+    #[error("{0}")]
+    RequestBodyError(#[from] RequestBodyError),
 }
 
 #[derive(Error, Debug)]

@@ -1,39 +1,24 @@
-[![progress-banner](https://backend.codecrafters.io/progress/http-server/caa1e811-8a61-4f35-9b1d-7840614c9d2d)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
+# Simple educational server
 
-This is a starting point for Rust solutions to the
-["Build Your Own HTTP server" Challenge](https://app.codecrafters.io/courses/http-server/overview).
+I reimplemented some of the HTTP protocol to improve myself in Rust. Beware, this is messy.
+This is a simple server implemented in Rust. It accepts a command line argument `--directory` to specify the directory where it can read and write files.
 
-[HTTP](https://en.wikipedia.org/wiki/Hypertext_Transfer_Protocol) is the
-protocol that powers the web. In this challenge, you'll build a HTTP/1.1 server
-that is capable of serving multiple clients.
+## Getting Started
 
-Along the way you'll learn about TCP servers,
-[HTTP request syntax](https://www.w3.org/Protocols/rfc2616/rfc2616-sec5.html),
-and more.
+To start the server, navigate to the directory containing the `main.rs` file and run the following command:
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
-
-# Passing the first stage
-
-The entry point for your HTTP server implementation is in `src/main.rs`. Study
-and uncomment the relevant code, and push your changes to pass the first stage:
-
-```sh
-git add .
-git commit -m "pass 1st stage" # any msg
-git push origin master
+```bash
+cargo run -- --directory /path/to/your/directory
 ```
 
-Time to move on to the next stage!
+Replace `/path/to/your/directory` with the path to the directory you want the server to read and write files.
 
-# Stage 2 & beyond
+## Endpoints
 
-Note: This section is for stages 2 and beyond.
+The server implements the following endpoints:
 
-1. Ensure you have `cargo (1.70)` installed locally
-1. Run `./your_server.sh` to run your program, which is implemented in
-   `src/main.rs`. This command compiles your Rust project, so it might be slow
-   the first time you run it. Subsequent runs will be fast.
-1. Commit your changes and run `git push origin master` to submit your solution
-   to CodeCrafters. Test output will be streamed to your terminal.
+- `GET /`: Returns a welcome message.
+- `GET /echo/<string>`: Returns the string that you provide.
+- `GET /files/`: Returns the content of file in the directory specified when starting the server.
+- `POST /files/`: Writes the request body to a new file in the directory specified when starting the server.
+
